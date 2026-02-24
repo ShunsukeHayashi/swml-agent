@@ -1054,3 +1054,174 @@ class SWMLAgent:
             lines.append("(no efficiency data)")
         lines.append(f"{C.CYAN}{sep}{C.RESET}")
         return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# Banner & Main
+# ════════════════════════════════════════════════════════════════════════════════
+
+BANNER = f"""{C.CYAN}
+  ███████╗██╗    ██╗███╗   ███╗██╗
+  ██╔════╝██║    ██║████╗ ████║██║
+  ███████╗██║ █╗ ██║██╔████╔██║██║
+  ╚════██║██║███╗██║██║╚██╔╝██║██║
+  ███████║╚███╔███╔╝██║ ╚═╝ ██║███████╗
+  ╚══════╝ ╚══╝╚══╝ ╚═╝     ╚═╝╚══════╝
+       {C.BOLD}A G E N T{C.RESET}{C.CYAN}   v{__version__}
+  ─────────────────────────────────────
+  Physics-based coding agent
+  S = ∫(T−V)dt → min     {C.DIM}(variational principle){C.RESET}{C.CYAN}
+  ─────────────────────────────────────{C.RESET}
+"""
+
+
+def detect_model():
+    models = ollama_list()
+    if not models:
+        return None
+    preferred = ["qwen3-coder", "qwen2.5-coder", "codellama", "deepseek-coder", "qwen3"]
+    for pref in preferred:
+        for m in models:
+            if pref in m:
+                return m
+    return models[0]
+
+
+def run_repl(agent, model):
+    print(f"{C.DIM}Commands: /help /status /dashboard /sessions /model X /quit{C.RESET}\n")
+
+    while True:
+        try:
+            user = input(f"{C.BGREEN}Ω ❯ {C.RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nbye")
+            break
+
+        if not user:
+            continue
+
+        cmd = user.lower()
+        if cmd in {"/quit", "/exit", "/q"}:
+            print("bye")
+            break
+        if cmd == "/help":
+            print(f"""
+  {C.BOLD}Commands:{C.RESET}
+    /status      Show current Ω-state
+    /dashboard   Show SWML metrics dashboard
+    /sessions    List saved sessions
+    /model NAME  Switch main model
+    /undo        Rollback last git checkpoint
+    /help        This help
+    /quit        Exit
+
+  {C.BOLD}Ω-space:{C.RESET}
+    H = T + V    (Hamiltonian = kinetic + potential)
+    S = ∫(T−V)dt (action integral, minimized)
+    η = efficiency (higher = better path)
+""")
+            continue
+        if cmd == "/status":
+            print(agent.omega.render())
+            continue
+        if cmd == "/dashboard":
+            print(agent.dashboard())
+            continue
+        if cmd == "/sessions":
+            rows = agent.session_store.list_sessions()
+            for r in rows:
+                print(f"  {r['id']}  {r['updated_at']}  {r['title']}")
+            continue
+        if cmd == "/undo":
+            t = SWMLTools(agent)
+            print(t.undo())
+            continue
+        if cmd.startswith("/model "):
+            new_model = user[7:].strip()
+            if new_model:
+                agent.model = new_model
+                agent.model_info = ollama_model_info(new_model)
+                agent.vision_enabled = supports_vision(new_model, agent.model_info)
+                print(f"  Switched to {C.BOLD}{new_model}{C.RESET}")
+            continue
+
+        agent.run_task(user)
+        print()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="SWML-Agent: physics-based coding agent")
+    parser.add_argument("-p", "--prompt", help="One-shot prompt")
+    parser.add_argument("--model", help="Main model")
+    parser.add_argument("--sidecar", help="Sidecar model for lightweight tasks")
+    parser.add_argument("--resume", help="Resume session id or 'latest'")
+    parser.add_argument("-y", "--yes", action="store_true", help="Auto-approve tools")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("--no-watch", action="store_true", help="Disable file watcher")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    model = args.model or detect_model()
+    if not model:
+        print(f"{C.RED}No Ollama model found. Try: ollama pull qwen3-coder{C.RESET}")
+        sys.exit(1)
+
+    store = SessionStore()
+    agent = None
+
+    if args.resume:
+        sid, data = store.load(args.resume)
+        if not data:
+            print(f"{C.RED}Session '{args.resume}' not found.{C.RESET}")
+            sys.exit(1)
+        agent = SWMLAgent.from_session(data, auto_approve=args.yes, verbose=args.verbose, watch=not args.no_watch)
+        if args.model:
+            agent.model = args.model
+        model = agent.model
+        print(f"Resumed session: {sid}")
+    else:
+        agent = SWMLAgent(
+            model=model,
+            sidecar_model=args.sidecar,
+            auto_approve=args.yes,
+            verbose=args.verbose,
+            session_store=store,
+            watch=not args.no_watch,
+        )
+
+    info = ollama_model_info(model)
+    details = info.get("details", {}) if isinstance(info, dict) else {}
+
+    print(BANNER)
+    print(f"  {C.DIM}model   :{C.RESET} {model}")
+    if details:
+        ps = details.get("parameter_size", "?")
+        q = details.get("quantization_level", "?")
+        print(f"  {C.DIM}params  :{C.RESET} {ps}, {q}")
+    print(f"  {C.DIM}sidecar :{C.RESET} {agent.sidecar_model or '-'}")
+    print(f"  {C.DIM}vision  :{C.RESET} {'yes' if agent.vision_enabled else 'no'}")
+    print(f"  {C.DIM}context :{C.RESET} {agent.context.limit}")
+    print(f"  {C.DIM}session :{C.RESET} {agent.session_id}")
+    print(f"  {C.DIM}tools   :{C.RESET} {len(agent.tools.tools)}")
+    print(f"  {C.DIM}git     :{C.RESET} {'yes' if agent.is_git_repo else 'no'}")
+    print()
+
+    if args.prompt:
+        try:
+            agent.run_task(args.prompt)
+        finally:
+            agent.close()
+        return
+
+    try:
+        run_repl(agent, model)
+    finally:
+        agent.close()
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    main()
