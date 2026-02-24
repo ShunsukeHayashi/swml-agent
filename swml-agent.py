@@ -174,10 +174,64 @@ class OmegaState:
         return max(0.0, min(1.0, 1.0 - abs(self.action_integral()) / worst))
 
     def render(self):
+        # Phase icons and Japanese descriptions
+        ICONS = {"OBSERVE": "🔭", "PLAN": "📐", "EXECUTE": "⚡", "VERIFY": "✅"}
+        LABELS_JP = {
+            "OBSERVE": "観察中 — コードを読んで状況を把握しています",
+            "PLAN":    "計画中 — 最適な実装方法を考えています",
+            "EXECUTE": "実行中 — コードを書いて変更を加えています",
+            "VERIFY":  "検証中 — 動作確認・テストをしています",
+        }
+        
+        # Phase progress bar
         states = []
         for p in self.PHASES:
-            states.append(f"{C.GREEN}{C.BOLD}[{p}]{C.RESET}" if p == self.phase else f"{C.DIM}{p}{C.RESET}")
-        return f"{' -> '.join(states)} H={self.T+self.V:.2f} S={self.action_integral():+.3f} eta={self.efficiency()*100:.0f}%"
+            icon = ICONS[p]
+            if p == self.phase:
+                states.append(f"{C.GREEN}{C.BOLD}{icon}[{p}]{C.RESET}")
+            elif self.PHASES.index(p) < self.PHASES.index(self.phase):
+                states.append(f"{C.GREEN}{icon} {p}{C.RESET}")
+            else:
+                states.append(f"{C.DIM}{icon} {p}{C.RESET}")
+        
+        phase_line = " → ".join(states)
+        
+        # Energy bar (visual)
+        H = self.T + self.V
+        bar_len = 20
+        filled = int((1.0 - H / 1.2) * bar_len)  # Lower H = more filled (closer to ground)
+        bar = "█" * max(0, filled) + "░" * (bar_len - max(0, filled))
+        
+        # Elapsed time
+        elapsed = time.time() - self.start_time
+        
+        # Efficiency with color
+        eta = self.efficiency()
+        eta_pct = int(eta * 100)
+        if eta_pct >= 80:
+            eta_color = C.GREEN
+            eta_label = "効率的"
+        elif eta_pct >= 50:
+            eta_color = C.YELLOW
+            eta_label = "普通"
+        else:
+            eta_color = C.RED
+            eta_label = "改善の余地あり"
+        
+        w = min(60, term_width() - 2)
+        border = "─" * w
+        
+        lines = [
+            f"{C.CYAN}{border}{C.RESET}",
+            f"  {phase_line}",
+            f"  {C.BOLD}{ICONS[self.phase]} {LABELS_JP[self.phase]}{C.RESET}",
+            f"",
+            f"  完了度  {bar} {C.DIM}(H={H:.2f}, 低いほど完了に近い){C.RESET}",
+            f"  効率    {eta_color}{eta_pct}% {eta_label}{C.RESET}  {C.DIM}│{C.RESET}  ステップ {self.step_count}  {C.DIM}│{C.RESET}  ツール {self.tool_calls}回",
+            f"  トークン {self.tokens_in}→{self.tokens_out}  {C.DIM}│{C.RESET}  経過 {elapsed:.1f}秒",
+            f"{C.CYAN}{border}{C.RESET}",
+        ]
+        return "\n".join(lines)
 
     def to_dict(self):
         return {
@@ -1092,7 +1146,7 @@ def run_repl(agent, model):
 
     while True:
         try:
-            user = input(f"{C.BGREEN}Ω ❯ {C.RESET}").strip()
+            user = input(f"{C.GREEN}Ω ❯ {C.RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             print("\nbye")
             break
